@@ -136,11 +136,15 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  try {
   // ローカル通知（Web ではスキップ）
   await _initLocalNotificationsIfSupported();
 
   // FCM（Android/iOS/Web 共通部分＋分岐）
   await _initFirebaseMessaging();
+  } catch(e) {
+    debugPrint(e.toString());
+  }
 
   runApp(const MyApp());
 }
