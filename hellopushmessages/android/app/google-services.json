@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "77396444992",
+    "project_id": "hello-push-messages",
+    "storage_bucket": "hello-push-messages.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:77396444992:android:21d5558b9c2d7e856edca5",
+        "android_client_info": {
+          "package_name": "com.example.hellopushmessages"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB8XkaWsaVIdmCGGRtAUADsSehzdKp2QaA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
