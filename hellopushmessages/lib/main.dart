@@ -1,7 +1,10 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:hellopushmessages/firebase_options.dart';
 import './push_service.dart';
+import './firebase_service.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,7 +25,9 @@ Future<void> main() async {
   }
 
   runApp(const MyApp());
+  await ensureSignedIn();
   await PushService.instance.askNotificationPermission();
+  await syncPushToken(userId: FirebaseAuth.instance.currentUser!.uid, platform: defaultTargetPlatform.name );
 }
 
 class MyApp extends StatelessWidget {

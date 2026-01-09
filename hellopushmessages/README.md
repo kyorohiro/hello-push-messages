@@ -2,6 +2,10 @@
 
 A new Flutter project.
 
+## Firebase 
+
+匿名ログイン を ON
+
 ## Android Setting 
 
 ```
