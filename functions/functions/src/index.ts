@@ -21,6 +21,73 @@ const LEASE_MS = 2 * 60 * 1000; // 2分: 落ちても自動復帰
 const WORKER_ID =
     process.env.K_REVISION ?? `local-${Math.random().toString(16).slice(2)}`;
 
+
+const DELETE_CONCURRENCY = 30;
+
+const INVALID = new Set([
+  "messaging/registration-token-not-registered",
+  "messaging/invalid-registration-token",
+]);
+
+
+type MsgItem = {
+    taskId: string;
+    userId: string;
+    tokenId: string;
+    token: string;
+    title: string;
+    body: string;
+};
+
+
+function isInvalidTokenCode(code: string) {
+  return INVALID.has(code);
+}
+
+function tokenRefOf(item: MsgItem) {
+  return db.collection("user").doc(item.userId).collection("push_tokens").doc(item.tokenId);
+}
+
+async function deleteInvalidTokens(
+  batch: MsgItem[],
+  responses: { success: boolean; error?: any }[],
+  deadlineMs?: number
+) {
+  // 重複deleteを避ける（同じ token doc が複数回出ても1回だけ）
+  const uniq = new Map<string, admin.firestore.DocumentReference>();
+
+  for (let i = 0; i < responses.length; i++) {
+    const r = responses[i];
+    if (r.success) continue;
+
+    const code = r.error?.code ?? "";
+    if (!isInvalidTokenCode(code)) continue;
+
+    const item = batch[i];
+    const key = `${item.userId}/${item.tokenId}`;
+    if (!uniq.has(key)) {
+      uniq.set(key, tokenRefOf(item));
+    }
+  }
+
+  const refs = [...uniq.values()];
+  if (refs.length === 0) return 0;
+
+  // 上限付き並列
+  let cursor = 0;
+  const workers = Array.from({ length: Math.max(1, DELETE_CONCURRENCY) }, async () => {
+    while (cursor < refs.length) {
+      if (deadlineMs && Date.now() >= deadlineMs) return;
+      const ref = refs[cursor++];
+      await ref.delete().catch(() => {});
+    }
+  });
+
+  await Promise.all(workers);
+  return refs.length;
+}
+
+
 export const action = async () => {
     const now = admin.firestore.Timestamp.now();
 
@@ -53,7 +120,7 @@ export const action = async () => {
     logger.info(`pushWorker: leased ${leased.length} tasks`);
 
     await processLeasedTasksWithSendEach(leased);
-    return 1;
+    return leased.length;
 };
 
 export const pushWorker = onSchedule(
@@ -66,7 +133,7 @@ export const pushWorker = onSchedule(
     },
     async () => {
         const start = Timestamp.now();
-        while (await action()) {
+        while (0 < (await action() ?? 0)) {
             const now = Timestamp.now();
             if ((now.toMillis() - start.toMillis()) / 1000 > 300) {
                 break;
@@ -108,14 +175,6 @@ async function leaseTask(taskId: string): Promise<boolean> {
 // Main (sendEach)
 // --------------------
 async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]) {
-    type MsgItem = {
-        taskId: string;
-        userId: string;
-        tokenId: string;
-        token: string;
-        title: string;
-        body: string;
-    };
 
     const msgItems: MsgItem[] = [];
 
@@ -161,11 +220,6 @@ async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]
 
     logger.info(`pushWorker: expanded to ${msgItems.length} messages`);
 
-    const INVALID = new Set([
-        "messaging/registration-token-not-registered",
-        "messaging/invalid-registration-token",
-    ]);
-
     // 500件ずつ sendEach
     for (let i = 0; i < msgItems.length; i += 500) {
         const batch = msgItems.slice(i, i + 500);
@@ -204,23 +258,26 @@ async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]
             });
         });
 
+        await deleteInvalidTokens(batch, resp.responses, /* deadlineMs? */ undefined);
+        //
         // 無効token掃除（シンプルに直列）
-        for (let idx = 0; idx < resp.responses.length; idx++) {
-            const r = resp.responses[idx];
-            if (!r.success) {
-                const code = (r.error as any)?.code ?? "";
-                if (INVALID.has(code)) {
-                    const item = batch[idx];
-                    await db
-                        .collection("user")
-                        .doc(item.userId)
-                        .collection("push_tokens")
-                        .doc(item.tokenId)
-                        .delete()
-                        .catch(() => { });
-                }
-            }
-        }
+        //
+        //for (let idx = 0; idx < resp.responses.length; idx++) {
+        //    const r = resp.responses[idx];
+        //    if (!r.success) {
+        //        const code = (r.error as any)?.code ?? "";
+        //        if (INVALID.has(code)) {
+        //            const item = batch[idx];
+        //            await db
+        //                .collection("user")
+        //                .doc(item.userId)
+        //                .collection("push_tokens")
+        //                .doc(item.tokenId)
+        //                .delete()
+        //                .catch(() => { });
+        //        }
+        //    }
+        //}
 
         // task更新（このチャンク分の集計なので、task跨ぎが気になるなら task単位に寄せる必要あり）
         for (const [taskId, s] of perTask.entries()) {
