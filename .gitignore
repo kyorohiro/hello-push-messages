@@ -1,1 +1,5 @@
 AuthKey_8JPX2QL233.p8
+
+# FVM Version Cache
+.fvm/
+.DS_Store
