@@ -4,7 +4,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:hellopushmessages/firebase_options.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
+//
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+//import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
+
+//-- 
+// 起動
+//--
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // 背景 isolate では Firebase が初期化されてない可能性があるので初期化する
@@ -16,6 +27,51 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // data-only の場合などはここで処理が必要になる。
 }
 
+//-- 
+// DB
+//--
+
+String tokenHash(String token) => sha1.convert(utf8.encode(token)).toString();
+
+Future<void> syncPushToken({required String userId, required String platform}) async {
+  ///final user = FirebaseAuth.instance.currentUser;
+  ///if (user == null) return;
+
+  final token = await FirebaseMessaging.instance.getToken();
+  if (token == null) return;
+
+  final prefs = await SharedPreferences.getInstance();
+  final lastToken = prefs.getString("push_last_token");
+  final lastSeenMs = prefs.getInt("push_last_seen_ms") ?? 0;
+
+  final nowMs = DateTime.now().millisecondsSinceEpoch;
+  final needSeenUpdate = (nowMs - lastSeenMs) > 24 * 60 * 60 * 1000; // 24h
+
+  // token が変わってない && lastSeen 更新も不要なら何もしない
+  if (lastToken == token && !needSeenUpdate) return;
+
+  final ref = FirebaseFirestore.instance
+      .collection('user')
+      .doc(userId)
+      .collection('push_tokens')
+      .doc(tokenHash(token));
+
+  await ref.set({
+    'token': token,
+    'platform': platform,
+    'lastSeenAt': FieldValue.serverTimestamp(),
+    if (lastToken != token) 'createdAt': FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
+
+  // ローカル記録更新
+  if (lastToken != token) {
+    await prefs.setString("push_last_token", token);
+  }
+  await prefs.setInt("push_last_seen_ms", nowMs);
+}
+//-- 
+// サービス
+//--
 class PushService {
   final FlutterLocalNotificationsPlugin flnp =
       FlutterLocalNotificationsPlugin();
@@ -175,3 +231,5 @@ class PushService {
     return true;
   }
 }
+
+
