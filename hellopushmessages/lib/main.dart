@@ -5,128 +5,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:hellopushmessages/firebase_options.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
-
-final FlutterLocalNotificationsPlugin flnp = FlutterLocalNotificationsPlugin();
-
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // 背景 isolate では Firebase が初期化されてない可能性があるので初期化する
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  // NOTE:
-  // Android/iOS でバックグラウンド時の「通知表示」は
-  // FCM の notification payload があれば OS が出すことが多い。
-  // data-only の場合などはここで処理が必要になる。
-}
-
-Future<void> _initLocalNotificationsIfSupported() async {
-  // flutter_local_notifications は Web では基本使わない（未サポート/制約あり）
-  if (kIsWeb) return;
-
-  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-
-  const darwinInit = DarwinInitializationSettings(
-    requestAlertPermission: true,
-    requestBadgePermission: true,
-    requestSoundPermission: true,
-  );
-
-  const initSettings = InitializationSettings(
-    android: androidInit,
-    iOS: darwinInit,
-  );
-
-  await flnp.initialize(
-    initSettings,
-    onDidReceiveNotificationResponse: (NotificationResponse r) {
-      // 通知タップ時の処理（payload があれば r.payload）
-      // ここで画面遷移したいなら navigator key を使うのが定番
-    },
-  );
-
-  // Android のフォアグラウンド通知表示用にチャンネルを作る（Androidのみ）
-  final androidPlugin =
-      flnp.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-  if (androidPlugin != null) {
-    const channel = AndroidNotificationChannel(
-      'high_importance_channel',
-      'High Importance Notifications',
-      description: 'Used for important notifications.',
-      importance: Importance.high,
-    );
-    await androidPlugin.createNotificationChannel(channel);
-  }
-}
-
-Future<void> _initFirebaseMessaging() async {
-  // Background handler は Firebase init の後に登録しておくのが安全
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-  // 通知許可（Android 13+ / iOS）
-  await FirebaseMessaging.instance.requestPermission(
-    alert: true,
-    badge: true,
-    sound: true,
-  );
-
-  // iOS: フォアグラウンドでも OS 側に表示させたい場合
-  // （Android は基本 onMessage でローカル通知を出す）
-  if (!kIsWeb) {
-    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
-  }
-
-  // フォアグラウンド受信（Androidはここでローカル通知を出すのが基本）
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-    if (kIsWeb) {
-      // Web は別実装（通知は Service Worker 側が主体）
-      debugPrint('onMessage(Web): ${message.messageId}');
-      return;
-    }
-
-    final notification = message.notification;
-    final android = message.notification?.android;
-
-    // Android: フォアグラウンドでも通知表示したい場合にローカル通知を出す
-    if (notification != null && android != null) {
-      await flnp.show(
-        notification.hashCode,
-        notification.title,
-        notification.body,
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'high_importance_channel',
-            'High Importance Notifications',
-            channelDescription: 'Used for important notifications.',
-            importance: Importance.high,
-            priority: Priority.high,
-          ),
-        ),
-      );
-    }
-  });
-
-  // 通知タップでアプリが開いた場合
-  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-    debugPrint('onMessageOpenedApp: ${message.messageId}');
-  });
-
-  // FCM token（まずはログに出す）
-  final token = await FirebaseMessaging.instance.getToken();
-  debugPrint('FCM token: $token');
-
-  // TODO: ここで token を Firestore / API に保存
-  // さらに確実にするなら onTokenRefresh も保存
-  FirebaseMessaging.instance.onTokenRefresh.listen((t) {
-    debugPrint('FCM token refreshed: $t');
-    // TODO: 保存処理
-  });
-}
+import './push_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -138,10 +17,10 @@ Future<void> main() async {
 
   try {
   // ローカル通知（Web ではスキップ）
-  await _initLocalNotificationsIfSupported();
+  await initLocalNotificationsIfSupported();
 
   // FCM（Android/iOS/Web 共通部分＋分岐）
-  await _initFirebaseMessaging();
+  await initFirebaseMessaging();
   } catch(e) {
     debugPrint(e.toString());
   }
