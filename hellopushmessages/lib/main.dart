@@ -17,15 +17,16 @@ Future<void> main() async {
 
   try {
   // ローカル通知（Web ではスキップ）
-  await initLocalNotificationsIfSupported();
+  await PushService.instance.initLocalNotificationsIfSupported();
 
   // FCM（Android/iOS/Web 共通部分＋分岐）
-  await initFirebaseMessaging();
+  await PushService.instance.initFirebaseMessaging();
   } catch(e) {
     debugPrint(e.toString());
   }
 
   runApp(const MyApp());
+  await PushService.instance.askNotificationPermission();
 }
 
 class MyApp extends StatelessWidget {
