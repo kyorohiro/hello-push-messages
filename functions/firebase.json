@@ -2,7 +2,7 @@
   "functions": [
     {
       "source": "functions",
-      "codebase": "push-message",
+      "codebase": "pushmessage",
       "ignore": [
         "node_modules",
         ".git",
@@ -10,9 +10,7 @@
         "firebase-debug.*.log",
         "*.local"
       ],
-      "predeploy": [
-        "npm --prefix \"$RESOURCE_DIR\" run build"
-      ]
+      "predeploy": []
     }
   ],
   "firestore": {
