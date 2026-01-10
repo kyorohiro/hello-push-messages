@@ -49,7 +49,7 @@ pushRouter.post("/kick", async (req: Request, res: Response) => {
 });
 
 apiserver.use("/push", pushRouter);
-apiserver.get("/check", (req, res) =>{
+apiserver.get("/hello", (req, res) =>{
     res.send(JSON.stringify({ message: "hello"}))
 });
 
