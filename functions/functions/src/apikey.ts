@@ -1,8 +1,6 @@
 import type { Request } from "express";
 import fs from "node:fs";
 import { jwtVerify, importSPKI } from "jose";
-import jwt from "jsonwebtoken";
-import jwkToPem from "jwk-to-pem";
 import { createPrivateKey, sign, randomUUID } from "crypto";
 
 const PUBLIC_KEY_PEM_PATH = "./ed25519_public.pem"; // ここは好きに
@@ -19,7 +17,10 @@ export async function verifyJwtFromRequest(req: Request) {
   if (!m) throw new Error("missing bearer token");
 
   const token = m[1];
+  return verifyJwtFromToekn(token);
+}
 
+async function verifyJwtFromToekn(token:any) {
   const { payload, protectedHeader } = await jwtVerify(token, publicKey, {
     issuer: ISSUER,
     audience: AUDIENCE,
