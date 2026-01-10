@@ -4,12 +4,15 @@ import { logger } from "firebase-functions";
 import serviceAccountJson from "../../hello-push-messages-firebase-adminsdk-fbsvc-4f52542438.json" with { type: "json" };
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccountJson as any),
-});
 
-const db = admin.firestore();
-const fcm = admin.messaging();
+type MsgItem = {
+    taskId: string;
+    userId: string;
+    tokenId: string;
+    token: string;
+    title: string;
+    body: string;
+};
 
 type TaskStatus = "queued" | "done" | "failed";
 
@@ -21,6 +24,17 @@ const LEASE_MS = 2 * 60 * 1000; // 2分: 落ちても自動復帰
 const WORKER_ID =
     process.env.K_REVISION ?? `local-${Math.random().toString(16).slice(2)}`;
 
+const CONCURRENCY_NUM = 10;
+
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccountJson as any),
+});
+
+const db = admin.firestore();
+const fcm = admin.messaging();
+
+
+
 
 const DELETE_CONCURRENCY = 30;
 
@@ -30,14 +44,6 @@ const INVALID = new Set([
 ]);
 
 
-type MsgItem = {
-    taskId: string;
-    userId: string;
-    tokenId: string;
-    token: string;
-    title: string;
-    body: string;
-};
 
 
 function isInvalidTokenCode(code: string) {
@@ -172,58 +178,119 @@ async function leaseTask(taskId: string): Promise<boolean> {
 }
 
 async function expandTasksToMsgItemsAndFinalizeNoToken(
-  tasks: { id: string; data: any }[]
+  tasks: { id: string; data: any }[],
+  concurrency: number
 ): Promise<MsgItem[]> {
-  const msgItems: MsgItem[] = [];
+  const conc = Math.max(1, Math.floor(concurrency || 1));
+  const results: MsgItem[] = [];
 
-  // token 展開（シンプル優先で直列）
-  for (const t of tasks) {
-    const userId: string = t.data.userId;
-    const title: string = t.data.title ?? "";
-    const body: string = t.data.message ?? "";
+  // 共有カーソルでタスクを分配（JSは単一スレッドなのでこの形でOK）
+  let cursor = 0;
 
-    const tokensSnap = await db
-      .collection("user")
-      .doc(userId)
-      .collection("push_tokens")
-      .get();
+  const workers = Array.from({ length: Math.min(conc, tasks.length) }, async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= tasks.length) return;
 
-    if (tokensSnap.empty) {
-      await finalize(t.id, "done", { resultSummary: "no-tokens" });
-      continue;
-    }
+      const t = tasks[idx];
 
-    let anyToken = false;
+      const userId: string = t.data.userId;
+      const title: string = t.data.title ?? "";
+      const body: string = t.data.body ?? t.data.message ?? "";
 
-    tokensSnap.forEach((d) => {
-      const token = (d.data() as any).token;
-      if (typeof token === "string" && token.length > 0) {
-        anyToken = true;
-        msgItems.push({
-          taskId: t.id,
-          userId,
-          tokenId: d.id,
-          token,
-          title,
-          body,
-        });
+      const tokensSnap = await db
+        .collection("user")
+        .doc(userId)
+        .collection("push_tokens")
+        .get();
+
+      if (tokensSnap.empty) {
+        await finalize(t.id, "done", { resultSummary: "no-tokens" });
+        continue;
       }
-    });
 
-    if (!anyToken) {
-      await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
+      const localItems: MsgItem[] = [];
+      tokensSnap.forEach((d) => {
+        const token = (d.data() as any).token;
+        if (typeof token === "string" && token.length > 0) {
+          localItems.push({
+            taskId: t.id,
+            userId,
+            tokenId: d.id,
+            token,
+            title,
+            body,
+          });
+        }
+      });
+
+      if (localItems.length === 0) {
+        await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
+        continue;
+      }
+
+      // 共有配列へまとめて追加（順序は保証しない）
+      results.push(...localItems);
     }
-  }
+  });
 
-  return msgItems;
+  await Promise.all(workers);
+  return results;
 }
+
+// async function expandTasksToMsgItemsAndFinalizeNoToken(
+//   tasks: { id: string; data: any }[]
+// ): Promise<MsgItem[]> {
+//   const msgItems: MsgItem[] = [];
+// 
+//   // token 展開（シンプル優先で直列）
+//   for (const t of tasks) {
+//     const userId: string = t.data.userId;
+//     const title: string = t.data.title ?? "";
+//     const body: string = t.data.message ?? "";
+// 
+//     const tokensSnap = await db
+//       .collection("user")
+//       .doc(userId)
+//       .collection("push_tokens")
+//       .get();
+// 
+//     if (tokensSnap.empty) {
+//       await finalize(t.id, "done", { resultSummary: "no-tokens" });
+//       continue;
+//     }
+// 
+//     let anyToken = false;
+// 
+//     tokensSnap.forEach((d) => {
+//       const token = (d.data() as any).token;
+//       if (typeof token === "string" && token.length > 0) {
+//         anyToken = true;
+//         msgItems.push({
+//           taskId: t.id,
+//           userId,
+//           tokenId: d.id,
+//           token,
+//           title,
+//           body,
+//         });
+//       }
+//     });
+// 
+//     if (!anyToken) {
+//       await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
+//     }
+//   }
+// 
+//   return msgItems;
+// }
 
 // --------------------
 // Main (sendEach)
 // --------------------
 async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]) {
 
-    const msgItems = await expandTasksToMsgItemsAndFinalizeNoToken(tasks);
+    const msgItems = await expandTasksToMsgItemsAndFinalizeNoToken(tasks, CONCURRENCY_NUM);
 
     if (msgItems.length === 0) return;
 
