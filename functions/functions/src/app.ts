@@ -92,7 +92,7 @@ const action = async (shardId: number | undefined) => {
         .where("scheduledAt", "<=", now);
 
     if (shardId !== undefined) {
-        q = q.where("shardId", "==", shardId);
+        q = q.where("shard", "==", shardId);
     }
 
     const tasksSnap = await q

@@ -16,6 +16,7 @@ function errorHandler(err: any, req: any, res: any, next: any) {
 }
 
 pushRouter.post("/kick", async (req: Request, res: Response) => {
+    console.log("> kick", req.body)
     try {
         // JWT guard（/issue から JWKS を取って検証）
         const claims = await verifyJwtFromRequest(req);
