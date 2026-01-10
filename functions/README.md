@@ -111,6 +111,19 @@ curl  -H "Authorization: Bearer .." http://0.0.0.0:3000/check
 
 
 
+#### ユーザー一覧取得
+
+```
+npx tsx src/main_list_users.ts
+```
+
+#### ユーザーIDとtitleとmessge を指定してPush通知を送信
+
+```
+npx tsx src/main_enqueue_push_task.ts <USER_UID> "テスト" "本文"
+npx tsx src/main_enqueue_push_task.ts <USER_UID> "テスト" "本文" "2026-01-11T23:10:00+09:00"
+```
+
 
 # Deploy
 
