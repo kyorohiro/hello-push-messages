@@ -171,50 +171,59 @@ async function leaseTask(taskId: string): Promise<boolean> {
     });
 }
 
+async function expandTasksToMsgItemsAndFinalizeNoToken(
+  tasks: { id: string; data: any }[]
+): Promise<MsgItem[]> {
+  const msgItems: MsgItem[] = [];
+
+  // token 展開（シンプル優先で直列）
+  for (const t of tasks) {
+    const userId: string = t.data.userId;
+    const title: string = t.data.title ?? "";
+    const body: string = t.data.message ?? "";
+
+    const tokensSnap = await db
+      .collection("user")
+      .doc(userId)
+      .collection("push_tokens")
+      .get();
+
+    if (tokensSnap.empty) {
+      await finalize(t.id, "done", { resultSummary: "no-tokens" });
+      continue;
+    }
+
+    let anyToken = false;
+
+    tokensSnap.forEach((d) => {
+      const token = (d.data() as any).token;
+      if (typeof token === "string" && token.length > 0) {
+        anyToken = true;
+        msgItems.push({
+          taskId: t.id,
+          userId,
+          tokenId: d.id,
+          token,
+          title,
+          body,
+        });
+      }
+    });
+
+    if (!anyToken) {
+      await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
+    }
+  }
+
+  return msgItems;
+}
+
 // --------------------
 // Main (sendEach)
 // --------------------
 async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]) {
 
-    const msgItems: MsgItem[] = [];
-
-    // token 展開（ここはシンプル優先で直列）
-    for (const t of tasks) {
-        const userId: string = t.data.userId;
-        const title: string = t.data.title ?? "";
-        const body: string = t.data.message ?? "";
-
-        const tokensSnap = await db
-            .collection("user")
-            .doc(userId)
-            .collection("push_tokens")
-            .get();
-
-        if (tokensSnap.empty) {
-            await finalize(t.id, "done", { resultSummary: "no-tokens" });
-            continue;
-        }
-
-        let anyToken = false;
-        tokensSnap.forEach((d) => {
-            const token = (d.data() as any).token;
-            if (typeof token === "string" && token.length > 0) {
-                anyToken = true;
-                msgItems.push({
-                    taskId: t.id,
-                    userId,
-                    tokenId: d.id,
-                    token,
-                    title,
-                    body,
-                });
-            }
-        });
-
-        if (!anyToken) {
-            await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
-        }
-    }
+    const msgItems = await expandTasksToMsgItemsAndFinalizeNoToken(tasks);
 
     if (msgItems.length === 0) return;
 
