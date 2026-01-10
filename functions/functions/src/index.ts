@@ -96,18 +96,30 @@ async function deleteInvalidTokens(
 }
 
 
-export const action = async () => {
+export const action = async (shardId: number | undefined) => {
     const now = admin.firestore.Timestamp.now();
 
     // queued のうち「leaseなし or lease切れ」を拾う
-    const tasksSnap = await db
+    //const tasksSnap = await db
+    //    .collection("push_tasks")
+    //    .where("status", "==", "queued")
+    //    .where("scheduledAt", "<=", now)
+    //    .orderBy("scheduledAt", "asc")
+    //    .limit(TASK_LIMIT)
+    //    .get();
+    let q: FirebaseFirestore.Query = db
         .collection("push_tasks")
         .where("status", "==", "queued")
-        .where("scheduledAt", "<=", now)
+        .where("scheduledAt", "<=", now);
+
+    if (shardId !== undefined) {
+        q = q.where("shardId", "==", shardId);
+    }
+
+    const tasksSnap = await q
         .orderBy("scheduledAt", "asc")
         .limit(TASK_LIMIT)
         .get();
-
     if (tasksSnap.empty) {
         logger.info("pushWorker: no queued tasks");
         return;
@@ -141,7 +153,7 @@ export const pushWorker = onSchedule(
     },
     async () => {
         const start = Timestamp.now();
-        while (0 < (await action() ?? 0)) {
+        while (0 < (await action(undefined) ?? 0)) {
             const now = Timestamp.now();
             if ((now.toMillis() - start.toMillis()) / 1000 > 300) {
                 break;
@@ -233,90 +245,90 @@ async function expandTasksToMsgItemsByTask(
 // Main (sendEach)
 // --------------------
 async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]) {
-  const { byTask, pendingFinalizes } = await expandTasksToMsgItemsByTask(tasks, CONCURRENCY_NUM);
+    const { byTask, pendingFinalizes } = await expandTasksToMsgItemsByTask(tasks, CONCURRENCY_NUM);
 
-  // finalize を溜める（taskId -> update data）
-  //const pendingFinalizes = new Map<string, any>();
+    // finalize を溜める（taskId -> update data）
+    //const pendingFinalizes = new Map<string, any>();
 
-  for (const items of byTask.values()) {
-    const taskId = items[0].taskId;
+    for (const items of byTask.values()) {
+        const taskId = items[0].taskId;
 
-    try {
-      let total = 0, success = 0, fail = 0, invalid = 0;
-      let lastError: string | null = null;
+        try {
+            let total = 0, success = 0, fail = 0, invalid = 0;
+            let lastError: string | null = null;
 
-      for (let i = 0; i < items.length; i += BATCH_NUM) {
-        const batchItems = items.slice(i, i + BATCH_NUM);
+            for (let i = 0; i < items.length; i += BATCH_NUM) {
+                const batchItems = items.slice(i, i + BATCH_NUM);
 
-        const messages: admin.messaging.Message[] = batchItems.map((m) => ({
-          token: m.token,
-          notification: { title: m.title, body: m.body },
-          data: { taskId: m.taskId, userId: m.userId },
-        }));
+                const messages: admin.messaging.Message[] = batchItems.map((m) => ({
+                    token: m.token,
+                    notification: { title: m.title, body: m.body },
+                    data: { taskId: m.taskId, userId: m.userId },
+                }));
 
-        const resp = await fcm.sendEach(messages);
+                const resp = await fcm.sendEach(messages);
 
-        resp.responses.forEach((r) => {
-          total++;
-          if (r.success) success++;
-          else {
-            fail++;
-            const code = (r.error as any)?.code ?? "";
-            lastError = `${code}`.slice(0, 200);
-            if (INVALID.has(code)) invalid++;
-          }
-        });
+                resp.responses.forEach((r) => {
+                    total++;
+                    if (r.success) success++;
+                    else {
+                        fail++;
+                        const code = (r.error as any)?.code ?? "";
+                        lastError = `${code}`.slice(0, 200);
+                        if (INVALID.has(code)) invalid++;
+                    }
+                });
 
-        await deleteInvalidTokens(batchItems, resp.responses, undefined);
-      }
+                await deleteInvalidTokens(batchItems, resp.responses, undefined);
+            }
 
-      const resultSummary = fail === 0 ? "success" : success > 0 ? "partial" : "failed";
-      const status: TaskStatus = resultSummary === "failed" ? "failed" : "done";
+            const resultSummary = fail === 0 ? "success" : success > 0 ? "partial" : "failed";
+            const status: TaskStatus = resultSummary === "failed" ? "failed" : "done";
 
-      pendingFinalizes.set(taskId, buildFinalizeData(status, {
-        totalTokens: total,
-        successCount: success,
-        invalidTokenCount: invalid,
-        failCount: fail,
-        lastError,
-        resultSummary,
-      }));
-    } catch (e: any) {
-      pendingFinalizes.set(taskId, buildFinalizeData("failed", {
-        resultSummary: "exception",
-        lastError: String(e?.message ?? e).slice(0, 200),
-      }));
+            pendingFinalizes.set(taskId, buildFinalizeData(status, {
+                totalTokens: total,
+                successCount: success,
+                invalidTokenCount: invalid,
+                failCount: fail,
+                lastError,
+                resultSummary,
+            }));
+        } catch (e: any) {
+            pendingFinalizes.set(taskId, buildFinalizeData("failed", {
+                resultSummary: "exception",
+                lastError: String(e?.message ?? e).slice(0, 200),
+            }));
+        }
     }
-  }
 
-  // ✅ まとめて更新
-  await commitFinalizes(pendingFinalizes);
+    // ✅ まとめて更新
+    await commitFinalizes(pendingFinalizes);
 }
 
 
 function buildFinalizeData(status: TaskStatus, extra: Record<string, any>) {
-  return {
-    status,
-    doneAt: admin.firestore.FieldValue.serverTimestamp(),
-    leaseUntil: null,
-    leaseBy: null,
-    ...extra,
-  };
+    return {
+        status,
+        doneAt: admin.firestore.FieldValue.serverTimestamp(),
+        leaseUntil: null,
+        leaseBy: null,
+        ...extra,
+    };
 }
 
 async function commitFinalizes(pending: Map<string, any>) {
-  if (pending.size === 0) return;
+    if (pending.size === 0) return;
 
-  // 500制限があるので分割コミット
-  const entries = [...pending.entries()];
-  for (let i = 0; i < entries.length; i += COMMIT_NUM) { // 余裕をみて450
-    const chunk = entries.slice(i, i + COMMIT_NUM);
-    const batch = db.batch();
-    for (const [taskId, data] of chunk) {
-      batch.update(db.collection("push_tasks").doc(taskId), data);
+    // 500制限があるので分割コミット
+    const entries = [...pending.entries()];
+    for (let i = 0; i < entries.length; i += COMMIT_NUM) { // 余裕をみて450
+        const chunk = entries.slice(i, i + COMMIT_NUM);
+        const batch = db.batch();
+        for (const [taskId, data] of chunk) {
+            batch.update(db.collection("push_tasks").doc(taskId), data);
+        }
+        await batch.commit();
     }
-    await batch.commit();
-  }
 }
 
 async function finalize(taskId: string, status: TaskStatus, extra: Record<string, any>) {
