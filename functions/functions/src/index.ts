@@ -182,9 +182,10 @@ async function leaseTask(taskId: string): Promise<boolean> {
 async function expandTasksToMsgItemsByTask(
     tasks: { id: string; data: any }[],
     concurrency: number
-): Promise<Map<string, MsgItem[]>> {
+): Promise<{ byTask: Map<string, MsgItem[]>; pendingFinalizes: Map<string, any> }> {
     const conc = Math.max(1, Math.floor(concurrency || 1));
     const byTask = new Map<string, MsgItem[]>();
+    const pendingFinalizes = new Map<string, any>();
 
     let cursor = 0;
     const workers = Array.from({ length: Math.min(conc, tasks.length) }, async () => {
@@ -200,7 +201,8 @@ async function expandTasksToMsgItemsByTask(
             const tokensSnap = await db.collection("user").doc(userId).collection("push_tokens").get();
 
             if (tokensSnap.empty) {
-                await finalize(t.id, "done", { resultSummary: "no-tokens" });
+                // await finalize(t.id, "done", { resultSummary: "no-tokens" });
+                pendingFinalizes.set(t.id, buildFinalizeData("done", { resultSummary: "no-tokens" }));
                 continue;
             }
 
@@ -213,7 +215,8 @@ async function expandTasksToMsgItemsByTask(
             });
 
             if (items.length === 0) {
-                await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
+                //await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
+                pendingFinalizes.set(t.id, buildFinalizeData("done", { resultSummary: "no-valid-tokens" }));
                 continue;
             }
 
@@ -222,126 +225,18 @@ async function expandTasksToMsgItemsByTask(
     });
 
     await Promise.all(workers);
-    return byTask;
+    //return byTask;
+    return { byTask, pendingFinalizes };
 }
-
-
-// async function expandTasksToMsgItemsAndFinalizeNoToken(
-//   tasks: { id: string; data: any }[],
-//   concurrency: number
-// ): Promise<MsgItem[]> {
-//   const conc = Math.max(1, Math.floor(concurrency || 1));
-//   const results: MsgItem[] = [];
-// 
-//   // 共有カーソルでタスクを分配（JSは単一スレッドなのでこの形でOK）
-//   let cursor = 0;
-// 
-//   const workers = Array.from({ length: Math.min(conc, tasks.length) }, async () => {
-//     while (true) {
-//       const idx = cursor++;
-//       if (idx >= tasks.length) return;
-// 
-//       const t = tasks[idx];
-// 
-//       const userId: string = t.data.userId;
-//       const title: string = t.data.title ?? "";
-//       const body: string = t.data.body ?? t.data.message ?? "";
-// 
-//       const tokensSnap = await db
-//         .collection("user")
-//         .doc(userId)
-//         .collection("push_tokens")
-//         .get();
-// 
-//       if (tokensSnap.empty) {
-//         await finalize(t.id, "done", { resultSummary: "no-tokens" });
-//         continue;
-//       }
-// 
-//       const localItems: MsgItem[] = [];
-//       tokensSnap.forEach((d) => {
-//         const token = (d.data() as any).token;
-//         if (typeof token === "string" && token.length > 0) {
-//           localItems.push({
-//             taskId: t.id,
-//             userId,
-//             tokenId: d.id,
-//             token,
-//             title,
-//             body,
-//           });
-//         }
-//       });
-// 
-//       if (localItems.length === 0) {
-//         await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
-//         continue;
-//       }
-// 
-//       // 共有配列へまとめて追加（順序は保証しない）
-//       results.push(...localItems);
-//     }
-//   });
-// 
-//   await Promise.all(workers);
-//   return results;
-// }
-
-// async function expandTasksToMsgItemsAndFinalizeNoToken(
-//   tasks: { id: string; data: any }[]
-// ): Promise<MsgItem[]> {
-//   const msgItems: MsgItem[] = [];
-// 
-//   // token 展開（シンプル優先で直列）
-//   for (const t of tasks) {
-//     const userId: string = t.data.userId;
-//     const title: string = t.data.title ?? "";
-//     const body: string = t.data.message ?? "";
-// 
-//     const tokensSnap = await db
-//       .collection("user")
-//       .doc(userId)
-//       .collection("push_tokens")
-//       .get();
-// 
-//     if (tokensSnap.empty) {
-//       await finalize(t.id, "done", { resultSummary: "no-tokens" });
-//       continue;
-//     }
-// 
-//     let anyToken = false;
-// 
-//     tokensSnap.forEach((d) => {
-//       const token = (d.data() as any).token;
-//       if (typeof token === "string" && token.length > 0) {
-//         anyToken = true;
-//         msgItems.push({
-//           taskId: t.id,
-//           userId,
-//           tokenId: d.id,
-//           token,
-//           title,
-//           body,
-//         });
-//       }
-//     });
-// 
-//     if (!anyToken) {
-//       await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
-//     }
-//   }
-// 
-//   return msgItems;
-// }
 
 // --------------------
 // Main (sendEach)
 // --------------------
 async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]) {
-  const byTask = await expandTasksToMsgItemsByTask(tasks, CONCURRENCY_NUM);
+  const { byTask, pendingFinalizes } = await expandTasksToMsgItemsByTask(tasks, CONCURRENCY_NUM);
 
   // finalize を溜める（taskId -> update data）
-  const pendingFinalizes = new Map<string, any>();
+  //const pendingFinalizes = new Map<string, any>();
 
   for (const items of byTask.values()) {
     const taskId = items[0].taskId;
