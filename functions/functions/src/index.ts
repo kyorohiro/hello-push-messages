@@ -16,6 +16,9 @@ export const pushMessage = onRequest({
     region: 'asia-northeast1'
 }, apiserver);
 
+//
+// 30分ごとに9分施行 
+// 1Worker 1分1000くらい
 export const pushWorker = onSchedule(
     {
         region: REGION,

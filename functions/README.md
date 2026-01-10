@@ -1,5 +1,64 @@
 Push notification system that assumes 10,000,000 notifications/day per minute
 
+firestoreに、
+
+```
+{
+userId:string
+title:string
+message:string
+}
+```
+
+の形式で、`/push_tasks/{taskId}`にMessageをアップすると、
+Push通知を送信します。
+
+送信先は、
+
+```
+{
+    platform:string
+    token:string
+}
+```
+
+の形式で  `/user/{uid}/push_tokens/{tokenId}` の Deviceになります
+
+
+
+
+# How to prepare
+
+```
+import serviceAccountJson from "../../hello-push-messages-firebase-adminsdk-fbsvc-4f52542438.json" with { type: "json" };
+```
+
+を任意のファイル名に変える
+
+
+APIKEY は 秘密鍵から、生成する。
+
+```
+npx tsx ./src/main_gen_apikey.ts
+
+_ed25519_public.pem
+_ed25519_private.pem
+に名前を変えてください
+```
+
+
+Deployする
+
+```
+cd functions 
+npm run build
+firebase deploy --only "functions:pushmessage:pushWorker" --project hello-push-messages
+firebase deploy --only "functions:pushmessage:pushMessage" --project hello-push-messages
+
+firebase deploy --only firestore:indexes --project hello-push-messages
+```
+
+
 
 # How to Use
 
@@ -57,6 +116,8 @@ curl  -H "Authorization: Bearer .." http://0.0.0.0:3000/check
 
 自動でビルドされないので注意
 
+hello-push-messages は 仮の名前
+
 ```
 
 cd functions 
@@ -66,3 +127,4 @@ firebase deploy --only "functions:pushmessage:pushMessage" --project hello-push-
 
 firebase deploy --only firestore:indexes --project hello-push-messages
 ```
+
