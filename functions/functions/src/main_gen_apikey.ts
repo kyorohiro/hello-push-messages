@@ -2,7 +2,7 @@ import { readFile } from "fs/promises";
 import { issueApiKeyJwt } from "./apikey.js";
 
 async function main() {
-  const keySource = process.env.JWT_PRIVATE_KEY_PEM || "./ed25519_private.pem";
+  const keySource = process.env.JWT_PRIVATE_KEY_PEM || "./_ed25519_private.pem";
 
   // envにPEMを直で入れてるならそのまま、パスなら読む
   const privateKeyPem = keySource.includes("BEGIN PRIVATE KEY")
