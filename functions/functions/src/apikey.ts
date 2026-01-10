@@ -1,105 +1,34 @@
+import type { Request } from "express";
+import fs from "node:fs";
+import { jwtVerify, importSPKI } from "jose";
 import jwt from "jsonwebtoken";
 import jwkToPem from "jwk-to-pem";
 import { createPrivateKey, sign, randomUUID } from "crypto";
 
-// ---- Auth / JWKS ----
-const ISSUE_JWKS_URL = process.env.ISSUE_JWKS_URL!; // 例: https://example.com/issue
-const JWT_ISSUER = process.env.JWT_ISSUER!;         // 例: https://example.com/
-const JWT_AUDIENCE = process.env.JWT_AUDIENCE!;     // 例: my-api
-const JWKS_TTL_MS = 10 * 60 * 1000; // 10分キャッシュ
+const PUBLIC_KEY_PEM_PATH = "./ed25519_public.pem"; // ここは好きに
+const ISSUER = "my-issuer";
+const AUDIENCE = "push-kick";
 
-import { readFile } from "fs/promises";
-import { createPublicKey, KeyObject } from "crypto";
+// 起動時に1回だけ読む（ホットリロードしたいならfs.watch等）
+const publicKeyPem = fs.readFileSync(PUBLIC_KEY_PEM_PATH, "utf8");
+const publicKey = await importSPKI(publicKeyPem, "EdDSA");
 
-type PublicKeyCache = {
-  fetchedAt: number;
-  key: KeyObject;
-  pem: string;
-};
+export async function verifyJwtFromRequest(req: Request) {
+  const auth = req.header("authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) throw new Error("missing bearer token");
 
-let pubKeyCache: PublicKeyCache | null = null;
+  const token = m[1];
 
-//
-const PUBLIC_KEY_PEM_PATH = "./ed25519_public.pem"; 
-// ↑ Functionsのデプロイに同梱するなら相対パスでOK（配置に合わせて調整）
-// 例: functions/src/ から読むなら "../ed25519_public.pem" など
-type JwksKeyLike = {
-  kty: "OKP";
-  crv: "Ed25519";
-  use?: "sig";
-  alg?: "EdDSA";
-  kid?: string;
-  // ここでは実運用のために KeyObject を直接持たせる（JWKSの形に寄せつつ）
-  _keyObject: import("crypto").KeyObject;
-};
+  const { payload, protectedHeader } = await jwtVerify(token, publicKey, {
+    issuer: ISSUER,
+    audience: AUDIENCE,
+  });
 
-let jwksCache: { fetchedAt: number; keys: JwksKeyLike[] } | null = null;
+  // kid を見たいなら
+  console.log("kid:", protectedHeader.kid);
 
-async function getJwksKeys(): Promise<any[]> {
-  const now = Date.now();
-  if (jwksCache && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
-
-  const pem = await readFile(PUBLIC_KEY_PEM_PATH, "utf8");
-  const keyObj = createPublicKey(pem);
-
-  jwksCache = {
-    fetchedAt: now,
-    keys: [
-      {
-        kty: "OKP",
-        crv: "Ed25519",
-        use: "sig",
-        alg: "EdDSA",
-        kid: "k1",          // 固定でいいならここ
-        _keyObject: keyObj, // ← verifyでこれを使う
-      },
-    ],
-  };
-
-  return jwksCache.keys;
-}
-
-// Node18+ の fetch を使う前提（Functions v2 / Cloud RunならOK）
-//type Jwks = { keys: any[] };
-//let jwksCache: { fetchedAt: number; keys: any[] } | null = null;
-//async function getJwksKeys(): Promise<any[]> {
-//     const now = Date.now();
-//     if (jwksCache && now - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
-// 
-//     const res = await fetch(ISSUE_JWKS_URL, { method: "GET" });
-//     if (!res.ok) throw new Error(`JWKS fetch failed: ${res.status}`);
-// 
-//     const jwks = (await res.json()) as Jwks;
-//     if (!jwks?.keys?.length) throw new Error("JWKS has no keys");
-// 
-//     jwksCache = { fetchedAt: now, keys: jwks.keys };
-//     return jwks.keys;
-//}
-
-async function verifyJwtFromRequest(req: any): Promise<any> {
-    const auth = req.headers?.authorization ?? "";
-    const m = /^Bearer\s+(.+)$/.exec(auth);
-    if (!m) throw new Error("missing bearer token");
-
-    const token = m[1];
-
-    // kid 取得（署名検証前にヘッダだけ読む）
-    const decoded = jwt.decode(token, { complete: true }) as any;
-    const kid = decoded?.header?.kid;
-    if (!kid) throw new Error("missing kid");
-
-    const keys = await getJwksKeys();
-    const jwk = keys.find((k) => k.kid === kid);
-    if (!jwk) throw new Error("unknown kid");
-
-    const pem = jwkToPem(jwk);
-
-    // iss/aud/exp などを検証
-    return jwt.verify(token, pem, {
-        algorithms: ["RS256"], // 必要なら調整
-        issuer: JWT_ISSUER,
-        audience: JWT_AUDIENCE,
-    });
+  return payload; // { sub, shardId, ... } が返る
 }
 
 //
@@ -158,7 +87,5 @@ function issueApiKeyJwt(opts: IssueJwtOptions): string {
 
 
 export {
-    verifyJwtFromRequest,
-    getJwksKeys,
     issueApiKeyJwt
 }
