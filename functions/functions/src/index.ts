@@ -341,7 +341,8 @@ async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]
 
     logger.info(`pushWorker: expanded tasks=${byTask.size}`);
 
-    for (const [taskId, items] of byTask.entries()) {
+    for (const items of byTask.values()) {
+        const taskId = items[0].taskId; 
         try {
             let total = 0, success = 0, fail = 0, invalid = 0;
             let lastError: string | null = null;
