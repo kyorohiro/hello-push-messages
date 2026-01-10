@@ -1,3 +1,6 @@
+Push notification system that assumes 10,000,000 notifications/day per minute
+
+
 # How to Use
 
 ### create apikey
@@ -34,8 +37,6 @@ curl -X "POST" -H "Authorization: Bearer .." http://0.0.0.0:3000/push/kick -d "{
 
 ```
 
-
-## x
 cd functions 
 npm run build
 firebase deploy --only "functions:pushmessage:pushWorker" --project hello-push-messages
