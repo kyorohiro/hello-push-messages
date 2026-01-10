@@ -12,7 +12,7 @@ const TIME_ZONE = "Asia/Tokyo";
 
 
 // v2 の onRequest にそのまま渡す
-export const webauthn = onRequest({
+export const pushMessage = onRequest({
     region: 'asia-northeast1'
 }, apiserver);
 

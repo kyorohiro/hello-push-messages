@@ -12,9 +12,6 @@ type MsgItem = {
 
 type TaskStatus = "queued" | "done" | "failed";
 
-const REGION = "asia-northeast1";
-const TIME_ZONE = "Asia/Tokyo";
-
 const TASK_LIMIT = 200;
 const LEASE_MS = 2 * 60 * 1000; // 2分: 落ちても自動復帰
 
@@ -22,7 +19,7 @@ const CONCURRENCY_NUM = 10;
 const COMMIT_NUM = 100; // MAX 500
 const BATCH_NUM = 100;// MAX 500
 const SHARD_COUNT = 1; // shardId = [0,]
-
+const USER_COLLECTION_NAME = "users"
 
 
 const DELETE_CONCURRENCY = 30;
@@ -40,7 +37,7 @@ function isInvalidTokenCode(code: string) {
 }
 
 function tokenRefOf(item: MsgItem) {
-    return db.collection("user").doc(item.userId).collection("push_tokens").doc(item.tokenId);
+    return db.collection(USER_COLLECTION_NAME).doc(item.userId).collection("push_tokens").doc(item.tokenId);
 }
 
 async function deleteInvalidTokens(
@@ -121,40 +118,6 @@ const action = async (shardId: number | undefined) => {
     await processLeasedTasksWithSendEach(leased);
     return leased.length;
 };
-/*
-export const pushWorker = onSchedule(
-    {
-        region: REGION,
-        schedule: "every 30 minutes",
-        timeZone: TIME_ZONE,
-        timeoutSeconds: 540, // 9分
-        memory: "1GiB",
-    },
-      async () => {
-    // all-run lock（schedule 同士や kick と衝突しても二重にならない）
-    const locked = await tryAcquireRunLock(undefined);
-    if (!locked) {
-      logger.info("pushWorker30m: skipped (run-lock busy)");
-      return;
-    }
-
-    try {
-      const start = Timestamp.now();
-
-      // shard を順番に回す（SHARD_COUNT=1なら1回だけ）
-      for (let sid = 0; sid < SHARD_COUNT; sid++) {
-        // shard個別にも lock したいならここで tryAcquireRunLock(sid) を入れる
-        while (0 < (await action(sid) ?? 0)) {
-          const now = Timestamp.now();
-          if ((now.toMillis() - start.toMillis()) / 1000 > 480) break; // 8分で打ち切り等
-        }
-      }
-    } finally {
-      await releaseRunLock(undefined);
-    }
-  }
-);
-*/
 
 // --------------------
 // Lease（期限付きロック）
@@ -204,7 +167,7 @@ async function expandTasksToMsgItemsByTask(
             const title: string = t.data.title ?? "";
             const body: string = t.data.body ?? t.data.message ?? "";
 
-            const tokensSnap = await db.collection("user").doc(userId).collection("push_tokens").get();
+            const tokensSnap = await db.collection(USER_COLLECTION_NAME).doc(userId).collection("push_tokens").get();
 
             if (tokensSnap.empty) {
                 // await finalize(t.id, "done", { resultSummary: "no-tokens" });
