@@ -39,58 +39,58 @@ const fcm = admin.messaging();
 const DELETE_CONCURRENCY = 30;
 
 const INVALID = new Set([
-  "messaging/registration-token-not-registered",
-  "messaging/invalid-registration-token",
+    "messaging/registration-token-not-registered",
+    "messaging/invalid-registration-token",
 ]);
 
 
 
 
 function isInvalidTokenCode(code: string) {
-  return INVALID.has(code);
+    return INVALID.has(code);
 }
 
 function tokenRefOf(item: MsgItem) {
-  return db.collection("user").doc(item.userId).collection("push_tokens").doc(item.tokenId);
+    return db.collection("user").doc(item.userId).collection("push_tokens").doc(item.tokenId);
 }
 
 async function deleteInvalidTokens(
-  batch: MsgItem[],
-  responses: { success: boolean; error?: any }[],
-  deadlineMs?: number
+    batch: MsgItem[],
+    responses: { success: boolean; error?: any }[],
+    deadlineMs?: number
 ) {
-  // 重複deleteを避ける（同じ token doc が複数回出ても1回だけ）
-  const uniq = new Map<string, admin.firestore.DocumentReference>();
+    // 重複deleteを避ける（同じ token doc が複数回出ても1回だけ）
+    const uniq = new Map<string, admin.firestore.DocumentReference>();
 
-  for (let i = 0; i < responses.length; i++) {
-    const r = responses[i];
-    if (r.success) continue;
+    for (let i = 0; i < responses.length; i++) {
+        const r = responses[i];
+        if (r.success) continue;
 
-    const code = r.error?.code ?? "";
-    if (!isInvalidTokenCode(code)) continue;
+        const code = r.error?.code ?? "";
+        if (!isInvalidTokenCode(code)) continue;
 
-    const item = batch[i];
-    const key = `${item.userId}/${item.tokenId}`;
-    if (!uniq.has(key)) {
-      uniq.set(key, tokenRefOf(item));
+        const item = batch[i];
+        const key = `${item.userId}/${item.tokenId}`;
+        if (!uniq.has(key)) {
+            uniq.set(key, tokenRefOf(item));
+        }
     }
-  }
 
-  const refs = [...uniq.values()];
-  if (refs.length === 0) return 0;
+    const refs = [...uniq.values()];
+    if (refs.length === 0) return 0;
 
-  // 上限付き並列
-  let cursor = 0;
-  const workers = Array.from({ length: Math.max(1, DELETE_CONCURRENCY) }, async () => {
-    while (cursor < refs.length) {
-      if (deadlineMs && Date.now() >= deadlineMs) return;
-      const ref = refs[cursor++];
-      await ref.delete().catch(() => {});
-    }
-  });
+    // 上限付き並列
+    let cursor = 0;
+    const workers = Array.from({ length: Math.max(1, DELETE_CONCURRENCY) }, async () => {
+        while (cursor < refs.length) {
+            if (deadlineMs && Date.now() >= deadlineMs) return;
+            const ref = refs[cursor++];
+            await ref.delete().catch(() => { });
+        }
+    });
 
-  await Promise.all(workers);
-  return refs.length;
+    await Promise.all(workers);
+    return refs.length;
 }
 
 
@@ -177,66 +177,113 @@ async function leaseTask(taskId: string): Promise<boolean> {
     });
 }
 
-async function expandTasksToMsgItemsAndFinalizeNoToken(
-  tasks: { id: string; data: any }[],
-  concurrency: number
-): Promise<MsgItem[]> {
-  const conc = Math.max(1, Math.floor(concurrency || 1));
-  const results: MsgItem[] = [];
+async function expandTasksToMsgItemsByTask(
+    tasks: { id: string; data: any }[],
+    concurrency: number
+): Promise<Map<string, MsgItem[]>> {
+    const conc = Math.max(1, Math.floor(concurrency || 1));
+    const byTask = new Map<string, MsgItem[]>();
 
-  // 共有カーソルでタスクを分配（JSは単一スレッドなのでこの形でOK）
-  let cursor = 0;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(conc, tasks.length) }, async () => {
+        while (true) {
+            const idx = cursor++;
+            if (idx >= tasks.length) return;
 
-  const workers = Array.from({ length: Math.min(conc, tasks.length) }, async () => {
-    while (true) {
-      const idx = cursor++;
-      if (idx >= tasks.length) return;
+            const t = tasks[idx];
+            const userId: string = t.data.userId;
+            const title: string = t.data.title ?? "";
+            const body: string = t.data.body ?? t.data.message ?? "";
 
-      const t = tasks[idx];
+            const tokensSnap = await db.collection("user").doc(userId).collection("push_tokens").get();
 
-      const userId: string = t.data.userId;
-      const title: string = t.data.title ?? "";
-      const body: string = t.data.body ?? t.data.message ?? "";
+            if (tokensSnap.empty) {
+                await finalize(t.id, "done", { resultSummary: "no-tokens" });
+                continue;
+            }
 
-      const tokensSnap = await db
-        .collection("user")
-        .doc(userId)
-        .collection("push_tokens")
-        .get();
+            const items: MsgItem[] = [];
+            tokensSnap.forEach((d) => {
+                const token = (d.data() as any).token;
+                if (typeof token === "string" && token.length > 0) {
+                    items.push({ taskId: t.id, userId, tokenId: d.id, token, title, body });
+                }
+            });
 
-      if (tokensSnap.empty) {
-        await finalize(t.id, "done", { resultSummary: "no-tokens" });
-        continue;
-      }
+            if (items.length === 0) {
+                await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
+                continue;
+            }
 
-      const localItems: MsgItem[] = [];
-      tokensSnap.forEach((d) => {
-        const token = (d.data() as any).token;
-        if (typeof token === "string" && token.length > 0) {
-          localItems.push({
-            taskId: t.id,
-            userId,
-            tokenId: d.id,
-            token,
-            title,
-            body,
-          });
+            byTask.set(t.id, items);
         }
-      });
+    });
 
-      if (localItems.length === 0) {
-        await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
-        continue;
-      }
-
-      // 共有配列へまとめて追加（順序は保証しない）
-      results.push(...localItems);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
+    await Promise.all(workers);
+    return byTask;
 }
+
+
+// async function expandTasksToMsgItemsAndFinalizeNoToken(
+//   tasks: { id: string; data: any }[],
+//   concurrency: number
+// ): Promise<MsgItem[]> {
+//   const conc = Math.max(1, Math.floor(concurrency || 1));
+//   const results: MsgItem[] = [];
+// 
+//   // 共有カーソルでタスクを分配（JSは単一スレッドなのでこの形でOK）
+//   let cursor = 0;
+// 
+//   const workers = Array.from({ length: Math.min(conc, tasks.length) }, async () => {
+//     while (true) {
+//       const idx = cursor++;
+//       if (idx >= tasks.length) return;
+// 
+//       const t = tasks[idx];
+// 
+//       const userId: string = t.data.userId;
+//       const title: string = t.data.title ?? "";
+//       const body: string = t.data.body ?? t.data.message ?? "";
+// 
+//       const tokensSnap = await db
+//         .collection("user")
+//         .doc(userId)
+//         .collection("push_tokens")
+//         .get();
+// 
+//       if (tokensSnap.empty) {
+//         await finalize(t.id, "done", { resultSummary: "no-tokens" });
+//         continue;
+//       }
+// 
+//       const localItems: MsgItem[] = [];
+//       tokensSnap.forEach((d) => {
+//         const token = (d.data() as any).token;
+//         if (typeof token === "string" && token.length > 0) {
+//           localItems.push({
+//             taskId: t.id,
+//             userId,
+//             tokenId: d.id,
+//             token,
+//             title,
+//             body,
+//           });
+//         }
+//       });
+// 
+//       if (localItems.length === 0) {
+//         await finalize(t.id, "done", { resultSummary: "no-valid-tokens" });
+//         continue;
+//       }
+// 
+//       // 共有配列へまとめて追加（順序は保証しない）
+//       results.push(...localItems);
+//     }
+//   });
+// 
+//   await Promise.all(workers);
+//   return results;
+// }
 
 // async function expandTasksToMsgItemsAndFinalizeNoToken(
 //   tasks: { id: string; data: any }[]
@@ -289,86 +336,61 @@ async function expandTasksToMsgItemsAndFinalizeNoToken(
 // Main (sendEach)
 // --------------------
 async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]) {
+    const byTask = await expandTasksToMsgItemsByTask(tasks, CONCURRENCY_NUM);
+    if (byTask.size === 0) return;
 
-    const msgItems = await expandTasksToMsgItemsAndFinalizeNoToken(tasks, CONCURRENCY_NUM);
+    logger.info(`pushWorker: expanded tasks=${byTask.size}`);
 
-    if (msgItems.length === 0) return;
+    for (const [taskId, items] of byTask.entries()) {
+        try {
+            let total = 0, success = 0, fail = 0, invalid = 0;
+            let lastError: string | null = null;
 
-    logger.info(`pushWorker: expanded to ${msgItems.length} messages`);
+            for (let i = 0; i < items.length; i += 500) {
+                const batch = items.slice(i, i + 500);
 
-    // 500件ずつ sendEach
-    for (let i = 0; i < msgItems.length; i += 500) {
-        const batch = msgItems.slice(i, i + 500);
+                const messages: admin.messaging.Message[] = batch.map((m) => ({
+                    token: m.token,
+                    notification: { title: m.title, body: m.body },
+                    data: { taskId: m.taskId, userId: m.userId },
+                }));
 
-        const messages: admin.messaging.Message[] = batch.map((m) => ({
-            token: m.token,
-            notification: { title: m.title, body: m.body },
-            data: { taskId: m.taskId, userId: m.userId },
-        }));
+                const resp = await fcm.sendEach(messages);
 
-        const resp = await fcm.sendEach(messages);
+                resp.responses.forEach((r) => {
+                    total++;
+                    if (r.success) success++;
+                    else {
+                        fail++;
+                        const code = (r.error as any)?.code ?? "";
+                        lastError = `${code}`.slice(0, 200);
+                        if (INVALID.has(code)) invalid++;
+                    }
+                });
 
-        const perTask = new Map<
-            string,
-            { total: number; success: number; fail: number; invalid: number; lastError?: string }
-        >();
+                await deleteInvalidTokens(batch, resp.responses, undefined);
+            }
 
-        const bump = (taskId: string, f: (x: any) => void) => {
-            const cur = perTask.get(taskId) ?? { total: 0, success: 0, fail: 0, invalid: 0 };
-            f(cur);
-            perTask.set(taskId, cur);
-        };
-
-        resp.responses.forEach((r, idx) => {
-            const item = batch[idx];
-            bump(item.taskId, (s) => {
-                s.total++;
-                if (r.success) {
-                    s.success++;
-                } else {
-                    s.fail++;
-                    const code = (r.error as any)?.code ?? "";
-                    s.lastError = `${code}`.slice(0, 200);
-                    if (INVALID.has(code)) s.invalid++;
-                }
-            });
-        });
-
-        await deleteInvalidTokens(batch, resp.responses, /* deadlineMs? */ undefined);
-        //
-        // 無効token掃除（シンプルに直列）
-        //
-        //for (let idx = 0; idx < resp.responses.length; idx++) {
-        //    const r = resp.responses[idx];
-        //    if (!r.success) {
-        //        const code = (r.error as any)?.code ?? "";
-        //        if (INVALID.has(code)) {
-        //            const item = batch[idx];
-        //            await db
-        //                .collection("user")
-        //                .doc(item.userId)
-        //                .collection("push_tokens")
-        //                .doc(item.tokenId)
-        //                .delete()
-        //                .catch(() => { });
-        //        }
-        //    }
-        //}
-
-        // task更新（このチャンク分の集計なので、task跨ぎが気になるなら task単位に寄せる必要あり）
-        for (const [taskId, s] of perTask.entries()) {
-            const resultSummary = s.fail === 0 ? "success" : s.success > 0 ? "partial" : "failed";
+            const resultSummary = fail === 0 ? "success" : success > 0 ? "partial" : "failed";
             await finalize(taskId, resultSummary === "failed" ? "failed" : "done", {
-                totalTokens: s.total,
-                successCount: s.success,
-                invalidTokenCount: s.invalid,
-                failCount: s.fail,
-                lastError: s.lastError ?? null,
+                totalTokens: total,
+                successCount: success,
+                invalidTokenCount: invalid,
+                failCount: fail,
+                lastError,
                 resultSummary,
+            });
+        } catch (e: any) {
+            // 例外でも lease を返して次回に回せるようにする
+            await finalize(taskId, "failed", {
+                resultSummary: "exception",
+                lastError: String(e?.message ?? e).slice(0, 200),
             });
         }
     }
+
 }
+
 
 async function finalize(taskId: string, status: TaskStatus, extra: Record<string, any>) {
     await db.collection("push_tasks").doc(taskId).update({
