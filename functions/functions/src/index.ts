@@ -25,6 +25,8 @@ const WORKER_ID =
     process.env.K_REVISION ?? `local-${Math.random().toString(16).slice(2)}`;
 
 const CONCURRENCY_NUM = 10;
+const COMMIT_NUM = 100; // MAX 500
+const BATCH_NUM = 100;// MAX 500
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccountJson as any),
@@ -336,62 +338,91 @@ async function expandTasksToMsgItemsByTask(
 // Main (sendEach)
 // --------------------
 async function processLeasedTasksWithSendEach(tasks: { id: string; data: any }[]) {
-    const byTask = await expandTasksToMsgItemsByTask(tasks, CONCURRENCY_NUM);
-    if (byTask.size === 0) return;
+  const byTask = await expandTasksToMsgItemsByTask(tasks, CONCURRENCY_NUM);
 
-    logger.info(`pushWorker: expanded tasks=${byTask.size}`);
+  // finalize を溜める（taskId -> update data）
+  const pendingFinalizes = new Map<string, any>();
 
-    for (const items of byTask.values()) {
-        const taskId = items[0].taskId; 
-        try {
-            let total = 0, success = 0, fail = 0, invalid = 0;
-            let lastError: string | null = null;
+  for (const items of byTask.values()) {
+    const taskId = items[0].taskId;
 
-            for (let i = 0; i < items.length; i += 500) {
-                const batch = items.slice(i, i + 500);
+    try {
+      let total = 0, success = 0, fail = 0, invalid = 0;
+      let lastError: string | null = null;
 
-                const messages: admin.messaging.Message[] = batch.map((m) => ({
-                    token: m.token,
-                    notification: { title: m.title, body: m.body },
-                    data: { taskId: m.taskId, userId: m.userId },
-                }));
+      for (let i = 0; i < items.length; i += BATCH_NUM) {
+        const batchItems = items.slice(i, i + BATCH_NUM);
 
-                const resp = await fcm.sendEach(messages);
+        const messages: admin.messaging.Message[] = batchItems.map((m) => ({
+          token: m.token,
+          notification: { title: m.title, body: m.body },
+          data: { taskId: m.taskId, userId: m.userId },
+        }));
 
-                resp.responses.forEach((r) => {
-                    total++;
-                    if (r.success) success++;
-                    else {
-                        fail++;
-                        const code = (r.error as any)?.code ?? "";
-                        lastError = `${code}`.slice(0, 200);
-                        if (INVALID.has(code)) invalid++;
-                    }
-                });
+        const resp = await fcm.sendEach(messages);
 
-                await deleteInvalidTokens(batch, resp.responses, undefined);
-            }
+        resp.responses.forEach((r) => {
+          total++;
+          if (r.success) success++;
+          else {
+            fail++;
+            const code = (r.error as any)?.code ?? "";
+            lastError = `${code}`.slice(0, 200);
+            if (INVALID.has(code)) invalid++;
+          }
+        });
 
-            const resultSummary = fail === 0 ? "success" : success > 0 ? "partial" : "failed";
-            await finalize(taskId, resultSummary === "failed" ? "failed" : "done", {
-                totalTokens: total,
-                successCount: success,
-                invalidTokenCount: invalid,
-                failCount: fail,
-                lastError,
-                resultSummary,
-            });
-        } catch (e: any) {
-            // 例外でも lease を返して次回に回せるようにする
-            await finalize(taskId, "failed", {
-                resultSummary: "exception",
-                lastError: String(e?.message ?? e).slice(0, 200),
-            });
-        }
+        await deleteInvalidTokens(batchItems, resp.responses, undefined);
+      }
+
+      const resultSummary = fail === 0 ? "success" : success > 0 ? "partial" : "failed";
+      const status: TaskStatus = resultSummary === "failed" ? "failed" : "done";
+
+      pendingFinalizes.set(taskId, buildFinalizeData(status, {
+        totalTokens: total,
+        successCount: success,
+        invalidTokenCount: invalid,
+        failCount: fail,
+        lastError,
+        resultSummary,
+      }));
+    } catch (e: any) {
+      pendingFinalizes.set(taskId, buildFinalizeData("failed", {
+        resultSummary: "exception",
+        lastError: String(e?.message ?? e).slice(0, 200),
+      }));
     }
+  }
 
+  // ✅ まとめて更新
+  await commitFinalizes(pendingFinalizes);
 }
 
+
+function buildFinalizeData(status: TaskStatus, extra: Record<string, any>) {
+  return {
+    status,
+    doneAt: admin.firestore.FieldValue.serverTimestamp(),
+    leaseUntil: null,
+    leaseBy: null,
+    ...extra,
+  };
+}
+
+async function commitFinalizes(pending: Map<string, any>) {
+  if (pending.size === 0) return;
+
+  // 500制限があるので分割コミット
+  const entries = [...pending.entries()];
+  for (let i = 0; i < entries.length; i += COMMIT_NUM) { // 余裕をみて450
+    const chunk = entries.slice(i, i + COMMIT_NUM);
+    const batch = db.batch();
+    for (const [taskId, data] of chunk) {
+      batch.update(db.collection("push_tasks").doc(taskId), data);
+    }
+    await batch.commit();
+  }
+}
 
 async function finalize(taskId: string, status: TaskStatus, extra: Record<string, any>) {
     await db.collection("push_tasks").doc(taskId).update({
