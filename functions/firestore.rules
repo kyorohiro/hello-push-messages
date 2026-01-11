@@ -1,16 +1,14 @@
-// firestore.rules
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // /users/{userId} ドキュメント
-    match /users/{userId} {
-      // 自分の uid のみ読み取り/更新OK
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
+    match /users/{uid} {
+      allow read, write: if true;
 
-    // それ以外のコレクションを将来足す場合はここに追記
-    // match /public/{docId} { allow read: if true; allow write: if false; }
+      match /push_tokens/{tokenId} {
+        allow read: if false;
+        allow write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
   }
 }
