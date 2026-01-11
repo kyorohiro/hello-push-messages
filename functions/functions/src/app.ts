@@ -18,7 +18,7 @@ const LEASE_MS = 2 * 60 * 1000; // 2分: 落ちても自動復帰
 const CONCURRENCY_NUM = 10;
 const COMMIT_NUM = 100; // MAX 500
 const BATCH_NUM = 100;// MAX 500
-const SHARD_COUNT = 1; // shardId = [0,]
+const SHARD_COUNT = 1; // shard = [0,]
 const USER_COLLECTION_NAME = "users"
 
 
@@ -80,7 +80,7 @@ async function deleteInvalidTokens(
 }
 
 
-const action = async (shardId: number | undefined) => {
+const action = async (shard: number | undefined) => {
     const now = admin.firestore.Timestamp.now();
 
     let q: FirebaseFirestore.Query = db
@@ -88,8 +88,8 @@ const action = async (shardId: number | undefined) => {
         .where("status", "==", "queued")
         .where("scheduledAt", "<=", now);
 
-    if (shardId !== undefined) {
-        q = q.where("shard", "==", shardId);
+    if (shard !== undefined) {
+        q = q.where("shard", "==", shard);
     }
 
     const tasksSnap = await q

@@ -29,7 +29,7 @@ async function verifyJwtFromToekn(token:any) {
   // kid を見たいなら
   console.log("kid:", protectedHeader.kid);
 
-  return payload; // { sub, shardId, ... } が返る
+  return payload; // { sub, shard, ... } が返る
 }
 
 //
@@ -50,7 +50,7 @@ type IssueJwtOptions = {
     issuer?: string;           // iss
     audience?: string;         // aud
     subject?: string;          // sub
-    shardId?: number;          // action(shardId) 用
+    shard?: number;          // action(shard) 用
     ttlSec?: number;           // 例: 60 〜 300 推奨
 };
 
@@ -72,7 +72,7 @@ function issueApiKeyJwt(opts: IssueJwtOptions): string {
         ...(opts.issuer ? { iss: opts.issuer } : {}),
         ...(opts.audience ? { aud: opts.audience } : {}),
         ...(opts.subject ? { sub: opts.subject } : {}),
-        ...(opts.shardId !== undefined ? { shardId: opts.shardId } : {}),
+        ...(opts.shard !== undefined ? { shard: opts.shard } : {}),
     };
 
     const encodedHeader = b64url(JSON.stringify(header));

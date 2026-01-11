@@ -21,19 +21,19 @@ pushRouter.post("/kick", async (req: Request, res: Response) => {
         // JWT guard（/issue から JWKS を取って検証）
         const claims = await verifyJwtFromRequest(req);
 
-        // shardId optional
-        const shardIdRaw = req.body?.shardId;
-        const shardId =
-            shardIdRaw === undefined || shardIdRaw === null
+        // shard optional
+        const shardRaw = req.body?.shard |  req.body?.shardId;
+        const shard =
+            shardRaw === undefined || shardRaw === null
                 ? undefined
-                : Number(shardIdRaw);
+                : Number(shardRaw);
 
-        if (shardId !== undefined && (!Number.isFinite(shardId) || shardId < 0 || shardId >= SHARD_COUNT)) {
-            return res.status(400).json({ ok: false, error: "invalid shardId" });
+        if (shard !== undefined && (!Number.isFinite(shard) || shard < 0 || shard >= SHARD_COUNT)) {
+            return res.status(400).json({ ok: false, error: "invalid shard" });
         }
 
         // 重複防止（kick 実行ロック）
-        const locked = await tryAcquireRunLock(shardId);
+        const locked = await tryAcquireRunLock(shard);
         if (!locked) {
             return res.status(409).json({ ok: false, error: "busy" });
         }
@@ -43,14 +43,14 @@ pushRouter.post("/kick", async (req: Request, res: Response) => {
             const start = Date.now();
 
             // kick は短く（必要ならループ）
-            while (0 < (await action(shardId) ?? 0)) {
+            while (0 < (await action(shard) ?? 0)) {
                 processed++;
                 if (Date.now() - start > 60_000) break; // kickは1分で打ち切り等
             }
 
-            return res.json({ ok: true, shardId: shardId ?? "all", processed, sub: claims?.sub ?? null });
+            return res.json({ ok: true, shard: shard ?? "all", processed, sub: claims?.sub ?? null });
         } finally {
-            await releaseRunLock(shardId);
+            await releaseRunLock(shard);
         }
     } catch (e: any) {
         return res.status(401).json({ ok: false, error: String(e?.message ?? e) });

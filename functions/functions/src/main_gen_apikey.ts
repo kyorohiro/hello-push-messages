@@ -15,7 +15,7 @@ async function main() {
     issuer: "my-issuer",
     audience: "push-kick",
     subject: "internal",
-    shardId: 3,
+    shard: 3,
     ttlSec: 120,
   });
 

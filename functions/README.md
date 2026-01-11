@@ -92,10 +92,10 @@ npx tsx --watch ./src/main_apiserver.ts
 ```
 
 通知送信WorkerをKICKする
-shardId を 0-{コードで設定} の 数字を指定してください
+shard を 0-{コードで設定} の 数字を指定してください
 
 ```
-curl -X "POST" -H "Authorization: Bearer eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImsxIn0.eyJpYXQiOjE3NjgwNjU3OTUsImV4cCI6MTc2ODA2NTkxNSwianRpIjoiZmRhNDdiOTktZjBjZC00YjFhLWExMzEtYWNkZDIwYzRlNzRlIiwiaXNzIjoibXktaXNzdWVyIiwiYXVkIjoicHVzaC1raWNrIiwic3ViIjoiaW50ZXJuYWwiLCJzaGFyZElkIjozfQ.8sp29IL2wEXkQaLFB3VsDyG332urmCxckEv_n0JNUrP-VEFumxL40xWnhP8yZJYSmwc8V29f-raYUSsFZwyDBg" http://0.0.0.0:3000/push/kick -H "content-type: application/json" -d '{"shardId":0}'
+curl -X "POST" -H "Authorization: Bearer eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImsxIn0.eyJpYXQiOjE3NjgwNjU3OTUsImV4cCI6MTc2ODA2NTkxNSwianRpIjoiZmRhNDdiOTktZjBjZC00YjFhLWExMzEtYWNkZDIwYzRlNzRlIiwiaXNzIjoibXktaXNzdWVyIiwiYXVkIjoicHVzaC1raWNrIiwic3ViIjoiaW50ZXJuYWwiLCJzaGFyZElkIjozfQ.8sp29IL2wEXkQaLFB3VsDyG332urmCxckEv_n0JNUrP-VEFumxL40xWnhP8yZJYSmwc8V29f-raYUSsFZwyDBg" http://0.0.0.0:3000/push/kick -H "content-type: application/json" -d '{"shard":0}'
 ```
 
 動作確認用
@@ -123,6 +123,13 @@ npx tsx src/main_list_users.ts
 npx tsx src/main_enqueue_push_task.ts <USER_UID> "テスト" "本文"
 npx tsx src/main_enqueue_push_task.ts <USER_UID> "テスト" "本文" "2026-01-11T23:10:00+09:00"
 ```
+
+#### API Server へ 疎通確認
+
+```
+curl https://asia-northeast1-hello-push-messages.cloudfunctions.net/pushMessage/hello
+```
+
 
 
 # Deploy
