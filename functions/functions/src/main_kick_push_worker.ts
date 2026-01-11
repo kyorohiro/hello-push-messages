@@ -9,7 +9,7 @@ const KICK_URL =
 // 署名用秘密鍵（PEM文字列を環境変数に入れてもOK）
 const PRIVATE_KEY_PEM =
   process.env.JWT_PRIVATE_KEY_PEM ||
-  fs.readFileSync(process.env.JWT_PRIVATE_KEY_PATH || "./ed25519_private.pem", "utf8");
+  fs.readFileSync(process.env.JWT_PRIVATE_KEY_PATH || "./_ed25519_private.pem", "utf8");
 
 const KID = process.env.JWT_KID || "k1";
 const ISSUER = process.env.JWT_ISSUER || "my-issuer";
