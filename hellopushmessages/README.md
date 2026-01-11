@@ -47,6 +47,22 @@ flutter clean
 flutter run
 ```
 
+```
+1) Push Notifications を有効化
+
+Xcode → Runner（Target）→ Signing & Capabilities
+
++ Capability → Push Notifications を追加
+
+2) Background Modes を有効化（必要なら）
+
+通知を「受け取るだけ」なら不要な場合もあるけど、データ更新やバックグラウンドで処理したいなら入れることが多い。
+
++ Capability → Background Modes
+
+Remote notifications にチェック
+```
+
 #### 0) 
 
 ```
